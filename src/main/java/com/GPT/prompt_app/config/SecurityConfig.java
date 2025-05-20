@@ -1,37 +1,68 @@
-package com.GPT.prompt_app.config; // Your package structure
+package com.GPT.prompt_app.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
-import static org.springframework.security.config.Customizer.withDefaults; // For default configurations
+import org.springframework.security.web.authentication.HttpStatusEntryPoint; // For unauthorized entry point
+import org.springframework.security.web.csrf.CookieCsrfTokenRepository; // For CSRF if we re-enable
 
-@Configuration // 1. Marks this class as a source of bean definitions
-@EnableWebSecurity // 2. Enables Spring Security's web security support
+@Configuration
+@EnableWebSecurity
 public class SecurityConfig {
 
-    // 3. Define a Bean for PasswordEncoder
     @Bean
     public PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder(); // Using BCrypt for strong password hashing
+        return new BCryptPasswordEncoder();
     }
 
-    // 4. Define a Bean for SecurityFilterChain to configure HTTP security rules
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        // If re-enabling CSRF and using JS frontend, CookieCsrfTokenRepository is good.
+        // .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+        // .ignoringRequestMatchers("/api/auth/**", "/ws/**") // Example for ignoring specific paths
         http
-                .csrf(csrf -> csrf.disable()) // TEMPORARY: Disable CSRF for now, especially for simpler API testing. We'll revisit this.
-                .authorizeHttpRequests(authz -> authz
-                        .requestMatchers("/api/auth/**").permitAll() // Allow access to signup/login endpoints
-                        // .requestMatchers("/ws/**").permitAll() // We'll add WebSocket permissions later
-                        // .requestMatchers("/", "/index.html", "/css/**", "/js/**", "/favicon.ico").permitAll() // Static resources
-                        .anyRequest().authenticated() // All other requests require authentication
+                .csrf(AbstractHttpConfigurer::disable // TEMPORARY: Keeping CSRF disabled for now
                 )
-                .formLogin(withDefaults()); // Enable basic form login with default settings
-        // .httpBasic(withDefaults()); // Or enable HTTP Basic authentication
+                .authorizeHttpRequests(authz -> authz
+                        .requestMatchers("/api/auth/**").permitAll() // Endpoints for signup and login
+                        // .requestMatchers("/ws/**").permitAll() // For WebSockets later
+                        // .requestMatchers("/", "/index.html", "/css/**", "/js/**").permitAll() // For frontend static files later
+                        .anyRequest().authenticated() // All other requests need authentication
+                )
+                .formLogin(formLogin -> formLogin
+                        .loginProcessingUrl("/api/auth/login") // Define the custom login processing URL
+                        .usernameParameter("username") // Optional: if your form field isn't 'username'
+                        .passwordParameter("password") // Optional: if your form field isn't 'password'
+                        .successHandler((request, response, authentication) -> {
+                            response.setStatus(HttpStatus.OK.value());
+                            response.setContentType("application/json");
+                            response.getWriter().write("{\"message\":\"Login successful\", \"username\":\"" + authentication.getName() + "\"}");
+                        })
+                        .failureHandler((request, response, exception) -> {
+                            response.setStatus(HttpStatus.UNAUTHORIZED.value());
+                            response.setContentType("application/json");
+                            response.getWriter().write("{\"message\":\"Login failed: " + exception.getMessage() + "\"}");
+                        })
+                        .permitAll() // Allow access to the loginProcessingUrl
+                )
+                .logout(logout -> logout
+                        .logoutUrl("/api/auth/logout")
+                        .logoutSuccessHandler((request, response, authentication) -> {
+                            response.setStatus(HttpStatus.OK.value());
+                            response.setContentType("application/json");
+                            response.getWriter().write("{\"message\":\"Logout successful\"}");
+                        })
+                        .permitAll()
+                )
+                .exceptionHandling(eh -> eh // Handles cases where authentication is required but not provided
+                        .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
+                );
 
         return http.build();
     }
